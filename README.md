@@ -7,7 +7,7 @@ This sample templates can be used as a starting point to provision a NGINX Proxy
 
 ### Option 1: Deploy a single instance
 
-![Single Instance deployment](img/NGINX-single.png)
+![Single Instance deployment](img/NGINX-Single.png)
 
 With this Option only a single instance with an NGINX Proxy is deployed in the given Subnet.
 
