@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  This template creates an NGINX Proxy for accessing a Kibana Frontent for a VPC ElasticSearch Cluster.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Host Configuration"
+        Parameters:
+          - ESHost
+          - CognitoHost
+      -
+        Label:
+          default: "Network Configuration"
+        Parameters:
+          - VPCID
+          - SubnetID
+      -
+        Label:
+          default: "Optional Parameters"
+        Parameters:
+          - AMI
+          - InstanceType
+
+Parameters:
+  ESHost:
+    Description: Elastic Search VPC endpoint without https://.
+    Type: String
+
+  CognitoHost:
+    Description: Host of the Cognito hosted UI without https://.
+    Type: String
+
+  VPCID:
+    Description: The ElasticSearch VPC-ID
+    Type: AWS::EC2::VPC::Id
+
+  SubnetID:
+    Description: Public Subnet ID
+    Type: AWS::EC2::Subnet::Id
+
+  AMI:
+    Description: AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+  InstanceType:
+    Description: The Instance Type for the NGINX Proxy.
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+
+Resources:
+  NGINXPlusInstancesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enables access to NGINX Plus instances.
+      VpcId: !Ref VPCID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+
+  NGINXProxy:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          bootstrap_install:
+            - prepare_system
+            - create_self_signed_cert
+            - configure_nginx
+        prepare_system:
+          commands:
+            install_nginx:
+              command: amazon-linux-extras install -y nginx1
+        create_self_signed_cert:
+          commands:
+            create_self_signed_cert:
+              command: sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/cert.key -out /etc/nginx/cert.crt -subj "/C=DE"
+        configure_nginx:
+          files:
+            /etc/nginx/conf.d/default.conf:
+              content: !Sub |
+                server {
+                    listen 443;
+                    server_name $host;
+                    rewrite ^/$ https://$host/_plugin/kibana redirect;
+
+                    ssl_certificate           /etc/nginx/cert.crt;
+                    ssl_certificate_key       /etc/nginx/cert.key;
+
+                    ssl on;
+                    ssl_session_cache  builtin:1000  shared:SSL:10m;
+                    ssl_protocols  TLSv1 TLSv1.1 TLSv1.2;
+                    ssl_ciphers HIGH:!aNULL:!eNULL:!EXPORT:!CAMELLIA:!DES:!MD5:!PSK:!RC4;
+                    ssl_prefer_server_ciphers on;
+
+
+                    location ^~ /_plugin/kibana {
+                        # Forward requests to Kibana
+                        proxy_pass https://${ESHost}/_plugin/kibana;
+
+                        # Handle redirects to Amazon Cognito
+                        proxy_redirect https://${CognitoHost} https://$host;
+
+                        # Update cookie domain and path
+                        proxy_cookie_domain ${ESHost} $host;
+
+                        proxy_set_header Accept-Encoding "";
+                        sub_filter_types *;
+                        sub_filter ${ESHost} $host;
+                        sub_filter_once off;
+
+                        # Response buffer settings
+                        proxy_buffer_size 128k;
+                        proxy_buffers 4 256k;
+                        proxy_busy_buffers_size 256k;
+                    }
+
+                    location ~ \/(log|sign|error|fav|forgot|change|confirm) {
+                        # Forward requests to Cognito
+                        proxy_pass https://${CognitoHost};
+
+                        # Handle redirects to Kibana
+                        proxy_redirect https://${ESHost} https://$host;
+
+                        # Handle redirects to Amazon Cognito
+                        proxy_redirect https://${CognitoHost} https://$host;
+
+                        # Update cookie domain
+                        proxy_cookie_domain ${CognitoHost} $host;
+                    }
+                }
+          services:
+            sysvinit:
+              nginx:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/nginx/conf.d/default.conf
+                  - /etc/nginx/conf.d/healthcheck.conf
+    Properties:
+      SubnetId: !Ref SubnetID
+      ImageId: !Ref AMI
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !Ref NGINXPlusInstancesSecurityGroup
+      UserData: !Base64
+        Fn::Join:
+          - ''
+          - - "#!/bin/bash\n"
+            - yum update -y
+            - "\n"
+            - !Sub '/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource
+                    NGINXProxy --configsets bootstrap_install --region
+                    ${AWS::Region}'
+            - "\n"
+            - !Sub '/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource
+                    NGINXProxy --region ${AWS::Region}'
+            - "\n"
+
+Outputs:
+  KibanaEndpoint:
+    Value: !Sub 'https://${NGINXProxy.PublicIp}/'
