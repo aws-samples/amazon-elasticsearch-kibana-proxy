@@ -1,6 +1,6 @@
 # Launch a NGINX proxy to access Kibana from outside a VPC that's using Amazon Cognito authentication
 
-If an AWS Elasticsearch cluster is in a virtual private cloud (VPC) Kibana is only accessible inside this VPC.
+If an Amazon Elasticsearch cluster is in a virtual private cloud (VPC) Kibana is only accessible inside this VPC.
 There are several way´s to access Kibana from outside that VPC as described [here](https://aws.amazon.com/de/premiumsupport/knowledge-center/kibana-outside-vpc-cognito-elasticsearch/)
 
 This sample templates can be used as a starting point to provision a NGINX Proxy to access Kibna following the guidance from [this post](https://aws.amazon.com/premiumsupport/knowledge-center/kibana-outside-vpc-nginx-elasticsearch/)
